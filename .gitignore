@@ -123,4 +123,4 @@ mmrotate/.mim
 *.pth
 ssd_tiny/
 demo/output/
-
+*.onnx

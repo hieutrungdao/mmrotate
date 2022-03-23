@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import torch
 import torch.nn as nn
 from mmcv.cnn import ConvModule
 from mmcv.runner import force_fp32
@@ -217,3 +218,101 @@ class RotatedRetinaHead(RotatedAnchorHead):
                 bboxes_list[img_id].append(decode_bbox_i.detach())
 
         return bboxes_list
+
+
+    @force_fp32(apply_to=('cls_scores', 'bbox_preds'))
+    def onnx_export(self,
+                    cls_scores,
+                    bbox_preds,
+                    score_factors=None,
+                    img_metas=None,
+                    with_nms=True):
+
+        # assert len(cls_scores) == len(bbox_preds)
+
+        # num_levels = len(cls_scores)
+
+        # device = cls_scores[0].device
+        # featmap_sizes = [featmap.size()[-2:] for featmap in cls_scores]
+        # mlvl_anchors = self.anchor_generator.grid_priors(
+        #     featmap_sizes, device=device)
+
+        
+
+        # # mlvl_priors = self.prior_generator.grid_priors(
+        # #     featmap_sizes,
+        # #     dtype=bbox_preds[0].dtype,
+        # #     device=bbox_preds[0].device)
+
+        # result_list = []
+        # for img_id, _ in enumerate(img_metas):
+        #     cls_score_list = [
+        #         cls_scores[i][img_id].detach() for i in range(num_levels)
+        #     ]
+        #     bbox_pred_list = [
+        #         bbox_preds[i][img_id].detach() for i in range(num_levels)
+        #     ]
+        #     img_shape = img_metas[img_id]['img_shape']
+        #     scale_factor = img_metas[img_id]['scale_factor']
+        #     if with_nms:
+        #         # some heads don't support with_nms argument
+        #         proposals = self._get_bboxes_single(cls_score_list,
+        #                                             bbox_pred_list,
+        #                                             mlvl_anchors, img_shape,
+        #                                             scale_factor, cfg=None)
+        #     else:
+        #         proposals = self._get_bboxes_single(cls_score_list,
+        #                                             bbox_pred_list,
+        #                                             mlvl_anchors, img_shape,
+        #                                             scale_factor, cfg=None,
+        #                                             with_nms=with_nms)
+        #     result_list.append(proposals)
+        
+        # return result_list[0]
+
+        num_levels = len(cls_scores)
+        assert num_levels == len(bbox_preds)
+
+        num_imgs = cls_scores[0].size(0)
+
+        for i in range(num_levels):
+            assert num_imgs == cls_scores[i].size(0) == bbox_preds[i].size(0)
+
+        device = cls_scores[0].device
+        featmap_sizes = [cls_scores[i].shape[-2:] for i in range(num_levels)]
+        mlvl_anchors = self.anchor_generator.grid_priors(
+            featmap_sizes, device=device)
+
+        bboxes_list = [[] for _ in range(num_imgs)]
+
+        for lvl in range(num_levels):
+            cls_score = cls_scores[lvl]
+            bbox_pred = bbox_preds[lvl]
+
+            anchors = mlvl_anchors[lvl]
+
+            cls_score = cls_score.permute(0, 2, 3, 1)
+            cls_score = cls_score.reshape(num_imgs, -1, self.num_anchors,
+                                          self.cls_out_channels)
+
+            cls_score, _ = cls_score.max(dim=-1, keepdim=True)
+            best_ind = cls_score.argmax(dim=-2, keepdim=True)
+            best_ind = best_ind.expand(-1, -1, -1, 5)
+
+            bbox_pred = bbox_pred.permute(0, 2, 3, 1)
+            bbox_pred = bbox_pred.reshape(num_imgs, -1, self.num_anchors, 5)
+            best_pred = bbox_pred.gather(
+                dim=-2, index=best_ind).squeeze(dim=-2)
+
+            anchors = anchors.reshape(-1, self.num_anchors, 5)
+
+            for img_id in range(num_imgs):
+                best_ind_i = best_ind[img_id]
+                best_pred_i = best_pred[img_id]
+                best_anchor_i = anchors.gather(
+                    dim=-2, index=best_ind_i).squeeze(dim=-2)
+                best_bbox_i = self.bbox_coder.decode(best_anchor_i,
+                                                     best_pred_i)
+                bboxes_list[img_id].append(best_bbox_i.detach())
+
+        return bboxes_list, cls_score

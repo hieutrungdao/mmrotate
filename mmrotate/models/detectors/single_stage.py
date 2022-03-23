@@ -5,6 +5,8 @@ from mmrotate.core import rbbox2result
 from ..builder import ROTATED_DETECTORS, build_backbone, build_head, build_neck
 from .base import RotatedBaseDetector
 
+import torch
+
 
 @ROTATED_DETECTORS.register_module()
 class RotatedSingleStageDetector(RotatedBaseDetector):
@@ -137,3 +139,54 @@ class RotatedSingleStageDetector(RotatedBaseDetector):
             for det_bboxes, det_labels in results_list
         ]
         return bbox_results
+    
+    def onnx_export(self, img, img_metas, with_nms=True):
+        """Test function without test time augmentation.
+        Args:
+            img (torch.Tensor): input images.
+            img_metas (list[dict]): List of image information.
+        Returns:
+            tuple[Tensor, Tensor]: dets of shape [N, num_det, 5]
+                and class labels of shape [N, num_det].
+        """
+        x = self.extract_feat(img)
+        outs = self.bbox_head(x)
+
+        # bbox_list = self.bbox_head.get_bboxes(
+        #     *outs, img_metas)
+
+        # get origin input shape to support onnx dynamic shape
+
+        # bbox_list = self.bbox_head.get_bboxes(
+        #     *outs, img_metas, rescale=rescale)
+
+        # bbox_results = [
+        #     rbbox2result(det_bboxes, det_labels, self.bbox_head.num_classes)
+        #     for det_bboxes, det_labels in bbox_list
+        # ]
+        # return bbox_results
+
+        # get shape as tensor
+        img_shape = torch._shape_as_tensor(img)[2:]
+        img_metas[0]['img_shape_for_onnx'] = img_shape
+        # get pad input shape to support onnx dynamic shape for exporting
+        # `CornerNet` and `CentripetalNet`, which 'pad_shape' is used
+        # for inference
+        img_metas[0]['pad_shape_for_onnx'] = img_shape
+
+        if len(outs) == 2:
+            # add dummy score_factor
+            outs = (*outs, None)
+        # TODO Can we change to `get_bboxes` when `onnx_export` fail
+        det_bboxes, det_labels = self.bbox_head.onnx_export(
+            *outs, img_metas, with_nms=with_nms)
+        # try:
+        #     det_bboxes, det_labels = self.bbox_head.onnx_export(
+        #         *outs, img_metas, with_nms=with_nms)
+        # except:
+        #     (det_bboxes, det_labels) = self.bbox_head.get_bboxes(
+        #         *outs, img_metas)[0]
+        # (det_bboxes, det_labels) = self.bbox_head.get_bboxes(
+        #         *outs, img_metas)[0]
+
+        return det_bboxes, det_labels

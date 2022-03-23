@@ -773,3 +773,4 @@ class RotatedAnchorHead(BaseDenseHead):
         else:
             scores = torch.cat(aug_scores, dim=0)
             return bboxes, scores
+
